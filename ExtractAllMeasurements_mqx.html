@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      background-color: yellowgreen;
+      color: darkred;
+      border: thin;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+  </style>
+</head>
+<body>
+  <h2>MultEQ-X measurement extractor by OCA</h2>
+  <br>
+  <label for="input">Select .mqx file to upload:</label>
+  <input type="file" id="input" accept=".mqx">
+  <br>
+  <p style="font-size: small; color: red;">Remember to upload ACM1HB standard mic calibration file (included in the ZIP) to REW before importing measurements for more accurate responses!</p>
+  <br>
+  <br>
+  <button onclick="decodeAndConvert()">
+    Decode, convert and save<br>measurements for REW
+  </button>
+  <p id="message" style="display: none;">Please wait, working on the zip...</p>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.0/FileSaver.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.6.0/jszip.min.js"></script>
+  <script>
+    async function decodeAndConvert() {
+      const button = document.querySelector('button');
+      button.disabled = true; // Disable the button
+      const message = document.getElementById('message');
+      message.style.display = 'block'; // Show the message
+      const input = document.getElementById('input');
+      const file = input.files[0];
+      const text = await file.text();
+      const jsonData = JSON.parse(text);
+      const channelMap = {};
+      const channelDataMap = jsonData._channelDataMap;
+      for (const channelGuid in channelDataMap) {
+        const metadata = channelDataMap[channelGuid].Metadata;
+        channelMap[channelGuid] = metadata.AvrOriginatingDesignation;
+      }
+      const zip = new JSZip();
+      const measurements = jsonData._measurements;
+      const trimPositionGuids = jsonData.CalibrationSettings.TrimPositionGuids;
+      const distancePoisitionGuid = jsonData.CalibrationSettings.DistancePoisitionGuid;
+      measurements.forEach((measurement, index) => {
+        const base64String = measurement.Data;
+        const bytesArray = new Uint8Array(atob(base64String).split('').map(c => c.charCodeAt(0)));
+        const floats = [];
+        for (let i = 0; i < bytesArray.length; i += 4) {
+          floats.push(readFloat(bytesArray, i));
+        }
+        const channelGuid = measurement.ChannelGuid;
+        const positionGuid = measurement.PositionGuid;
+        const avrOriginatingDesignation = channelMap[channelGuid];
+        const positionIndex = trimPositionGuids.indexOf(positionGuid);
+const isDistancePosition = positionGuid === distancePoisitionGuid;
+let filename;
+  if (positionIndex === -1) {
+    const shortenedGuid = positionGuid.substring(0, 3);
+    filename = isDistancePosition
+      ? `${avrOriginatingDesignation}_${shortenedGuid}_dp.txt`
+      : `${avrOriginatingDesignation}_${shortenedGuid}.txt`;
+  } else {
+    filename = isDistancePosition
+      ? `${avrOriginatingDesignation}_${positionIndex}_dp.txt`
+      : `${avrOriginatingDesignation}_${positionIndex}.txt`;
+  }
+        const txtContent = `* Impulse Response data saved by REW
+0 // Peak value before normalisation
+0 // Peak index
+16384 // Response length
+2.0833333333333333E-5 // Sample interval (seconds)
+0.0 // Start time (seconds)
+* Data start
+${floats.join('\n')}`;
+        zip.file(filename, txtContent);
+      });
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      saveAs(zipBlob, 'REW_Measurements.zip');
+      message.style.display = 'none'; // Hide the message
+      button.disabled = false; // Enable the button
+    }
+    function readFloat(bytesArray, start) {
+  const dv = new DataView(bytesArray.buffer);
+  const intBits = dv.getUint32(start, true);
+  const signBit = (intBits >> 31) & 0x1;
+  const exponent = (intBits >> 23) & 0xFF;
+  const mantissa = intBits & 0x7FFFFF;
+  if (exponent === 0xFF) {
+    if (mantissa === 0) {
+      return signBit ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
+    } else {
+      return NaN;
+    }
+  }
+  const bias = 127;
+  const normalizedMantissa = 1 + mantissa / Math.pow(2, 23);
+  const value = Math.pow(-1, signBit) * normalizedMantissa * Math.pow(2, exponent - bias);
+  return value;
+}
+  </script>
+</body>
+</html>
